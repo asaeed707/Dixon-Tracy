@@ -1,0 +1,53 @@
+name: Dixon Tracy Loading Times
+
+on:
+  schedule:
+    # 6:45 AM Pacific during daylight time. The Python script chooses the previous
+    # business day, so Monday reports Friday.
+    - cron: "45 13 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      report_date:
+        description: "Optional report date in YYYY-MM-DD format"
+        required: false
+        type: string
+
+jobs:
+  build-and-email:
+    runs-on: ubuntu-latest
+    env:
+      GEOTAB_USERNAME: ${{ secrets.GEOTAB_USERNAME }}
+      GEOTAB_PASSWORD: ${{ secrets.GEOTAB_PASSWORD }}
+      GEOTAB_DATABASE: ${{ secrets.GEOTAB_DATABASE }}
+      GEOTAB_SERVER: ${{ secrets.GEOTAB_SERVER }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+      EMAIL_TO: ${{ secrets.EMAIL_TO }}
+      REPORT_DATE: ${{ inputs.report_date }}
+      TZ: America/Los_Angeles
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build and email reports
+        run: python scripts/dixon_tracy_loading_times.py
+
+      - name: Upload report files
+        uses: actions/upload-artifact@v4
+        with:
+          name: dixon-tracy-loading-times
+          path: |
+            outputs/*.xlsx
+            work/*.json
