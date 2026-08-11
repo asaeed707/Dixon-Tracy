@@ -27,6 +27,7 @@ jobs:
       EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
       EMAIL_TO: ${{ secrets.EMAIL_TO }}
       REPORT_DATE: ${{ inputs.report_date }}
+      REQUIRE_EMAIL: "1"
       TZ: America/Los_Angeles
 
     steps:
@@ -44,7 +45,36 @@ jobs:
       - name: Build and email reports
         run: python scripts/dixon_tracy_loading_times.py
 
+      - name: Add report summary
+        if: always()
+        run: |
+          {
+            echo "## Dixon Tracy Loading Times"
+            echo
+            if ls work/bb_dixon_tracy_loading_times_*.json >/dev/null 2>&1; then
+              python - <<'PY'
+import json
+from pathlib import Path
+
+for path in sorted(Path("work").glob("bb_dixon_tracy_loading_times_*.json")):
+    audit = json.loads(path.read_text())
+    print(f"- Report date: `{audit['reportDate']}` ({audit['weekday']})")
+    print(f"- Raw Geotab trips: `{audit['rawTripCount']}`")
+    for label, zone in audit["zones"].items():
+        print(
+            f"- {label}: `{zone['cleanedLoadCount']}` loads, "
+            f"`{zone['ignoredUnder25Count']}` ignored under-25 stops, "
+            f"`{zone['longLoadCount']}` over 1:30, "
+            f"sorted starts `{zone['sortedStartTimes']}`"
+        )
+PY
+            else
+              echo "- No audit JSON was generated."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload report files
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: dixon-tracy-loading-times

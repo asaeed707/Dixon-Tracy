@@ -300,7 +300,10 @@ def email_outputs(files: list[Path]) -> None:
     recipients = [item.strip() for item in os.environ.get("EMAIL_TO", "").split(",") if item.strip()]
 
     if not all([host, username, password, sender]) or not recipients:
-        print("Email skipped: SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM/SMTP_USERNAME, and EMAIL_TO are required.")
+        message = "Email skipped: SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM/SMTP_USERNAME, and EMAIL_TO are required."
+        if os.environ.get("CI") or os.environ.get("REQUIRE_EMAIL") == "1":
+            raise SystemExit(message)
+        print(message)
         return
 
     subject_date = display_date(REPORT_DAY)
@@ -328,6 +331,20 @@ def email_outputs(files: list[Path]) -> None:
     print(f"emailed={','.join(str(path) for path in files)}")
 
 
+def validate_outputs(audit: dict, plant_files: list[Path]) -> None:
+    missing_files = [str(path) for path in plant_files if not path.exists() or path.stat().st_size == 0]
+    if missing_files:
+        raise SystemExit(f"Missing or empty report files: {', '.join(missing_files)}")
+
+    for zone_label, zone_audit in audit["zones"].items():
+        if zone_audit["cleanedLoadCount"] < 0:
+            raise SystemExit(f"{zone_label} has an invalid cleaned load count.")
+        if zone_audit["ignoredUnder25Count"] < 0:
+            raise SystemExit(f"{zone_label} has an invalid ignored stop count.")
+        if zone_audit["longLoadCount"] > zone_audit["cleanedLoadCount"]:
+            raise SystemExit(f"{zone_label} long-load count exceeds cleaned load count.")
+
+
 def main() -> int:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_AUDIT_DIR.mkdir(parents=True, exist_ok=True)
@@ -353,15 +370,20 @@ def main() -> int:
         write_zone_sheet(wb, zone_config["sheet"], sessions)
         single_output = save_single_zone_workbook(zone_config, sessions)
         plant_files.append(single_output)
+        sorted_start_times = [item["start"] for item in sessions] == sorted(item["start"] for item in sessions)
         audit["files"][zone_config["label"]] = str(single_output)
         audit["zones"][zone_config["label"]] = {
             "cleanedLoadCount": len(sessions),
             "ignoredUnder25Count": len(ignored),
             "longLoadCount": sum(1 for item in sessions if item["duration"] > LONG_LOAD),
             "averageSeconds": sum(item["duration"].total_seconds() for item in sessions) / len(sessions) if sessions else 0,
+            "sortedStartTimes": sorted_start_times,
         }
+        if not sorted_start_times:
+            raise SystemExit(f"{zone_config['label']} start times are not sorted.")
 
     wb.save(OUTPUT_XLSX)
+    validate_outputs(audit, [OUTPUT_XLSX, *plant_files])
     OUTPUT_JSON.write_text(json.dumps(audit, indent=2), encoding="utf-8")
     print(f"output={OUTPUT_XLSX}")
     print(json.dumps(audit["zones"], indent=2))
