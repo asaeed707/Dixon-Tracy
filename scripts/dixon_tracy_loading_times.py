@@ -14,6 +14,11 @@ from zoneinfo import ZoneInfo
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.table import Table, TableStyleInfo
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import inch
+from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table as PdfTable, TableStyle
 
 from geotab_connect import GeotabClient
 
@@ -25,6 +30,9 @@ OUTPUT_AUDIT_DIR = Path(os.environ.get("OUTPUT_AUDIT_DIR", PROJECT_ROOT / "work"
 MIN_DURATION = timedelta(minutes=25)
 MERGE_GAP = timedelta(minutes=25)
 LONG_LOAD = timedelta(hours=1, minutes=30)
+MAX_DURATION = timedelta(hours=4)
+OPERATING_START = time(5, 0)
+OPERATING_END = time(17, 0)
 ZONE_TOLERANCE_MILES = float(os.environ.get("ZONE_TOLERANCE_MILES", "0.2"))
 
 ZONES = [
@@ -50,6 +58,9 @@ OUTPUT_JSON = OUTPUT_AUDIT_DIR / f"bb_dixon_tracy_loading_times_{REPORT_DAY.isof
 
 def display_date(value: date) -> str:
     return f"{value.strftime('%B')} {value.day}"
+
+
+OUTPUT_PDF = OUTPUT_DIR / f"BB Dixon and BB Tracy Loading Times for {display_date(REPORT_DAY)}.pdf"
 
 
 def require_env(name: str) -> str:
@@ -169,8 +180,12 @@ def sessions_for_zone(zone: dict, trips: list[dict], devices: dict[str, dict]) -
             continue
         if end is None:
             end = start
-        if start.date() != REPORT_DAY:
+        window_start = datetime.combine(REPORT_DAY, OPERATING_START)
+        window_end = datetime.combine(REPORT_DAY, OPERATING_END)
+        if end <= window_start or start >= window_end:
             continue
+        start = max(start, window_start)
+        end = min(end, window_end)
         device_id = ref_id(trip.get("device"))
         device = devices.get(device_id, {})
         stops.append(
@@ -205,7 +220,9 @@ def sessions_for_zone(zone: dict, trips: list[dict], devices: dict[str, dict]) -
                 trip_ids.append(stop["trip_id"])
                 continue
             duration = current["end"] - current["start"]
-            if duration >= MIN_DURATION:
+            if duration > MAX_DURATION:
+                ignored.append({**current, "duration": duration, "reason": "Probable error: duration over 4 hours"})
+            elif duration >= MIN_DURATION:
                 sessions.append({**current, "duration": duration, "trip_ids": trip_ids[:]})
             else:
                 ignored.append({**current, "duration": duration, "reason": "Stop under 25 minutes"})
@@ -213,7 +230,9 @@ def sessions_for_zone(zone: dict, trips: list[dict], devices: dict[str, dict]) -
             trip_ids = [stop["trip_id"]]
         if current is not None:
             duration = current["end"] - current["start"]
-            if duration >= MIN_DURATION:
+            if duration > MAX_DURATION:
+                ignored.append({**current, "duration": duration, "reason": "Probable error: duration over 4 hours"})
+            elif duration >= MIN_DURATION:
                 sessions.append({**current, "duration": duration, "trip_ids": trip_ids[:]})
             else:
                 ignored.append({**current, "duration": duration, "reason": "Stop under 25 minutes"})
@@ -291,7 +310,68 @@ def save_single_zone_workbook(zone_config: dict, sessions: list[dict]) -> Path:
     return output
 
 
-def email_outputs(files: list[Path]) -> None:
+def duration_text(value: timedelta) -> str:
+    total_minutes = int(value.total_seconds() // 60)
+    return f"{total_minutes // 60}:{total_minutes % 60:02d}"
+
+
+def create_combined_pdf(zone_sessions: list[tuple[dict, list[dict]]]) -> Path:
+    styles = getSampleStyleSheet()
+    doc = SimpleDocTemplate(
+        str(OUTPUT_PDF),
+        pagesize=letter,
+        leftMargin=0.65 * inch,
+        rightMargin=0.65 * inch,
+        topMargin=0.45 * inch,
+        bottomMargin=0.45 * inch,
+    )
+    story = []
+    for index, (zone_config, sessions) in enumerate(zone_sessions):
+        title = Paragraph(
+            f"{zone_config['label']} Loading Times - {REPORT_DAY.strftime('%B')} {REPORT_DAY.day}, {REPORT_DAY.year}",
+            styles["Title"],
+        )
+        story.extend([title, Spacer(1, 0.2 * inch)])
+        rows = [["Device", "Date", "Start Time", "End Time", "Duration"]]
+        for session in sessions:
+            rows.append(
+                [
+                    session["device"],
+                    session["start"].strftime("%b %d, %Y").replace(" 0", " "),
+                    session["start"].strftime("%-I:%M:%S %p"),
+                    session["end"].strftime("%-I:%M:%S %p"),
+                    duration_text(session["duration"]),
+                ]
+            )
+        average = timedelta(seconds=sum(item["duration"].total_seconds() for item in sessions) / len(sessions)) if sessions else timedelta(0)
+        rows.append(["", "", "", "Average", duration_text(average) if sessions else "-"])
+        table = PdfTable(rows, colWidths=[2.05 * inch, 1.18 * inch, 1.5 * inch, 1.5 * inch, 1.02 * inch], repeatRows=1)
+        commands = [
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E78")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica"),
+            ("FONTSIZE", (0, 0), (-1, -1), 10),
+            ("ALIGN", (1, 1), (-1, -1), "CENTER"),
+            ("ALIGN", (0, 0), (-1, 0), "LEFT"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D9D9D9")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#FAFAFA")]),
+            ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#E7F0F7")),
+            ("TOPPADDING", (0, 0), (-1, -1), 7),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ]
+        for row_index, session in enumerate(sessions, start=1):
+            if session["duration"] > LONG_LOAD:
+                commands.append(("BACKGROUND", (0, row_index), (-1, row_index), colors.yellow))
+        table.setStyle(TableStyle(commands))
+        story.append(table)
+        if index < len(zone_sessions) - 1:
+            story.append(PageBreak())
+    doc.build(story)
+    return OUTPUT_PDF
+
+
+def email_output(file_path: Path) -> None:
     host = os.environ.get("SMTP_HOST")
     port = int(os.environ.get("SMTP_PORT") or "587")
     username = os.environ.get("SMTP_USERNAME")
@@ -312,23 +392,16 @@ def email_outputs(files: list[Path]) -> None:
     message["To"] = ", ".join(recipients)
     message["Subject"] = f"Dixon and Tracy Loading Times for {subject_date}"
     message.set_content(
-        "Attached are the Dixon and Tracy loading time reports for "
+        "Attached is the combined Dixon and Tracy loading time report for "
         f"{subject_date}.\n\nThis was generated automatically from Geotab."
     )
-
-    for file_path in files:
-        message.add_attachment(
-            file_path.read_bytes(),
-            maintype="application",
-            subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            filename=file_path.name,
-        )
+    message.add_attachment(file_path.read_bytes(), maintype="application", subtype="pdf", filename=file_path.name)
 
     with smtplib.SMTP(host, port, timeout=60) as smtp:
         smtp.starttls()
         smtp.login(username, password)
         smtp.send_message(message)
-    print(f"emailed={','.join(str(path) for path in files)}")
+    print(f"emailed={file_path}")
 
 
 def validate_outputs(audit: dict, plant_files: list[Path]) -> None:
@@ -343,6 +416,10 @@ def validate_outputs(audit: dict, plant_files: list[Path]) -> None:
             raise SystemExit(f"{zone_label} has an invalid ignored stop count.")
         if zone_audit["longLoadCount"] > zone_audit["cleanedLoadCount"]:
             raise SystemExit(f"{zone_label} long-load count exceeds cleaned load count.")
+        if not zone_audit["withinOperatingWindow"]:
+            raise SystemExit(f"{zone_label} contains time outside 5:00 AM-5:00 PM.")
+        if zone_audit["maxDurationSeconds"] > MAX_DURATION.total_seconds():
+            raise SystemExit(f"{zone_label} contains a duration over 4 hours.")
 
 
 def main() -> int:
@@ -357,16 +434,18 @@ def main() -> int:
     audit = {
         "reportDate": REPORT_DAY.isoformat(),
         "weekday": REPORT_DAY.strftime("%A"),
-        "method": "Trip stopPoint inside zone polygon or within tolerance; stop to nextTripStart; merge re-entry gaps <= 25 minutes; exclude final durations under 25 minutes",
+        "method": "Trip stopPoint inside zone polygon or within tolerance; clamp to 5:00 AM-5:00 PM; stop to nextTripStart; merge re-entry gaps <= 25 minutes; exclude durations under 25 minutes and probable errors over 4 hours",
         "zoneToleranceMiles": ZONE_TOLERANCE_MILES,
         "rawTripCount": len(trips),
         "files": {},
         "zones": {},
     }
     plant_files = []
+    zone_sessions = []
 
     for zone_config in ZONES:
         sessions, ignored = sessions_for_zone(zone_map[zone_config["id"]], trips, devices)
+        zone_sessions.append((zone_config, sessions))
         write_zone_sheet(wb, zone_config["sheet"], sessions)
         single_output = save_single_zone_workbook(zone_config, sessions)
         plant_files.append(single_output)
@@ -376,18 +455,27 @@ def main() -> int:
             "cleanedLoadCount": len(sessions),
             "ignoredUnder25Count": len(ignored),
             "longLoadCount": sum(1 for item in sessions if item["duration"] > LONG_LOAD),
+            "probableErrorCount": sum(1 for item in ignored if item["reason"].startswith("Probable error")),
             "averageSeconds": sum(item["duration"].total_seconds() for item in sessions) / len(sessions) if sessions else 0,
+            "maxDurationSeconds": max((item["duration"].total_seconds() for item in sessions), default=0),
+            "withinOperatingWindow": all(
+                OPERATING_START <= item["start"].time() <= OPERATING_END
+                and OPERATING_START <= item["end"].time() <= OPERATING_END
+                for item in sessions
+            ),
             "sortedStartTimes": sorted_start_times,
         }
         if not sorted_start_times:
             raise SystemExit(f"{zone_config['label']} start times are not sorted.")
 
     wb.save(OUTPUT_XLSX)
-    validate_outputs(audit, [OUTPUT_XLSX, *plant_files])
+    pdf_output = create_combined_pdf(zone_sessions)
+    audit["files"]["combinedPdf"] = str(pdf_output)
+    validate_outputs(audit, [OUTPUT_XLSX, *plant_files, pdf_output])
     OUTPUT_JSON.write_text(json.dumps(audit, indent=2), encoding="utf-8")
     print(f"output={OUTPUT_XLSX}")
     print(json.dumps(audit["zones"], indent=2))
-    email_outputs(plant_files)
+    email_output(pdf_output)
     return 0
 
 

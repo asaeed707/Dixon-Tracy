@@ -64,8 +64,10 @@ jobs:
                   print(
                       f"- {label}: `{zone['cleanedLoadCount']}` loads, "
                       f"`{zone['ignoredUnder25Count']}` ignored under-25 stops, "
-                      f"`{zone['longLoadCount']}` over 1:30, "
-                      f"sorted starts `{zone['sortedStartTimes']}`"
+            f"`{zone['longLoadCount']}` over 1:30, "
+            f"`{zone['probableErrorCount']}` probable errors over 4:00, "
+            f"within 5:00 AM-5:00 PM `{zone['withinOperatingWindow']}`, "
+            f"sorted starts `{zone['sortedStartTimes']}`"
                   )
           PY
             else
@@ -80,4 +82,5 @@ jobs:
           name: dixon-tracy-loading-times
           path: |
             outputs/*.xlsx
+            outputs/*.pdf
             work/*.json
