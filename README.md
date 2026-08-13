@@ -73,3 +73,7 @@ Only activity inside the 5:00 AM-5:00 PM operating window is reported. Sessions 
 
 The workflow also uploads the combined PDF, Excel source files, and audit JSON as GitHub Actions
 artifacts for backup.
+
+## Monthly PABCO Tacoma and Basalite Dupont
+
+A separate cloud workflow runs on the first day of every month at 6:45 AM Pacific and reports the full prior Pacific calendar month. It enforces the 5:00 AM-5:00 PM operating window, excludes probable errors over four hours, and emails one combined PDF with PABCO Tacoma first and Basalite Dupont second.
