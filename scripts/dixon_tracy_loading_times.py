@@ -390,7 +390,7 @@ def email_output(file_path: Path) -> None:
     message = EmailMessage()
     message["From"] = sender
     message["To"] = ", ".join(recipients)
-    message["Subject"] = f"Dixon and Tracy Loading Times for {subject_date}"
+    message["Subject"] = f"Dixon/Tracy Loading Times for {subject_date}"
     message.set_content(
         "Attached is the combined Dixon and Tracy loading time report for "
         f"{subject_date}.\n\nThis was generated automatically from Geotab."
