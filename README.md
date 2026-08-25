@@ -69,7 +69,7 @@ Each file contains only:
 
 Rows over 1 hour 30 minutes are highlighted yellow, visits under 25 minutes are excluded, and re-entry gaps within 25 minutes are merged.
 
-Only activity inside the 5:00 AM-5:00 PM operating window is reported. Sessions are clipped to that window, and any resulting duration over four hours is treated as a probable data error and excluded. The emailed deliverable is one PDF named like `BB Dixon and BB Tracy Loading Times for August 10.pdf`, with Dixon first and Tracy second.
+Only activity inside the 5:00 AM-5:00 PM operating window is reported. Sessions are clipped to that window, and any resulting duration over four hours is treated as a probable data error and excluded. The emailed deliverable is one PDF named like `Dixon-Tracy Loading Times for August 10, 2026.pdf`, with Dixon first and Tracy second. The filename uses a hyphen because `/` in the email subject is a path separator and cannot be used literally in a filename.
 
 The workflow also uploads the combined PDF, Excel source files, and audit JSON as GitHub Actions
 artifacts for backup.

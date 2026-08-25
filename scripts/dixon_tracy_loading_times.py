@@ -60,7 +60,7 @@ def display_date(value: date) -> str:
     return f"{value.strftime('%B')} {value.day}"
 
 
-OUTPUT_PDF = OUTPUT_DIR / f"BB Dixon and BB Tracy Loading Times for {display_date(REPORT_DAY)}.pdf"
+OUTPUT_PDF = OUTPUT_DIR / f"Dixon-Tracy Loading Times for {display_date(REPORT_DAY)}, {REPORT_DAY.year}.pdf"
 
 
 def require_env(name: str) -> str:
