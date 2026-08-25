@@ -386,7 +386,7 @@ def email_output(file_path: Path) -> None:
         print(message)
         return
 
-    subject_date = display_date(REPORT_DAY)
+    subject_date = f"{display_date(REPORT_DAY)}, {REPORT_DAY.year}"
     message = EmailMessage()
     message["From"] = sender
     message["To"] = ", ".join(recipients)
