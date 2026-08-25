@@ -2,9 +2,9 @@ name: Dixon Tracy Loading Times
 
 on:
   schedule:
-    # 6:45 AM Pacific during daylight time. The Python script chooses the previous
-    # business day, so Monday reports Friday.
-    - cron: "45 13 * * 1-5"
+    # GitHub cron uses UTC. Trigger at both possible UTC hours and gate below so
+    # the report runs at 6:00 AM Pacific across daylight-saving changes.
+    - cron: "0 13,14 * * 1-5"
   workflow_dispatch:
     inputs:
       report_date:
@@ -31,22 +31,35 @@ jobs:
       TZ: America/Los_Angeles
 
     steps:
+      - name: Confirm 6 AM Pacific schedule
+        id: schedule_gate
+        run: |
+          if [[ "${{ github.event_name }}" != "schedule" || "$(TZ=America/Los_Angeles date +%H)" == "06" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Check out repository
+        if: steps.schedule_gate.outputs.run == 'true'
         uses: actions/checkout@v4
 
       - name: Set up Python
+        if: steps.schedule_gate.outputs.run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Install dependencies
+        if: steps.schedule_gate.outputs.run == 'true'
         run: pip install -r requirements.txt
 
       - name: Build and email reports
+        if: steps.schedule_gate.outputs.run == 'true'
         run: python scripts/dixon_tracy_loading_times.py
 
       - name: Add report summary
-        if: always()
+        if: always() && steps.schedule_gate.outputs.run == 'true'
         run: |
           {
             echo "## Dixon Tracy Loading Times"
@@ -76,7 +89,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload report files
-        if: always()
+        if: always() && steps.schedule_gate.outputs.run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: dixon-tracy-loading-times

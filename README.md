@@ -30,7 +30,7 @@ For Gmail SMTP:
 - `SMTP_USERNAME`: your Gmail address
 - `SMTP_PASSWORD`: a Gmail app password
 - `EMAIL_FROM`: your Gmail address
-- `EMAIL_TO`: `ali.saeed@materialtransport.com`
+- `EMAIL_TO`: `Brad.Wilson@materialtransport.com`
 
 Multiple recipients can be comma-separated in `EMAIL_TO`.
 
