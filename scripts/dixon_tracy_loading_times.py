@@ -180,12 +180,8 @@ def sessions_for_zone(zone: dict, trips: list[dict], devices: dict[str, dict]) -
             continue
         if end is None:
             end = start
-        window_start = datetime.combine(REPORT_DAY, OPERATING_START)
-        window_end = datetime.combine(REPORT_DAY, OPERATING_END)
-        if end <= window_start or start >= window_end:
+        if start.date() != REPORT_DAY or not OPERATING_START <= start.time() < OPERATING_END:
             continue
-        start = max(start, window_start)
-        end = min(end, window_end)
         device_id = ref_id(trip.get("device"))
         device = devices.get(device_id, {})
         stops.append(
@@ -244,7 +240,7 @@ def sessions_for_zone(zone: dict, trips: list[dict], devices: dict[str, dict]) -
 
 def write_zone_sheet(wb: Workbook, sheet_name: str, sessions: list[dict]) -> None:
     ws = wb.create_sheet(sheet_name)
-    ws.append(["Device", "Date", "Start Time", "End Time", "Duration"])
+    ws.append(["Device", "Date", "Start Time", "Duration"])
 
     header_fill = PatternFill("solid", fgColor="1F4E78")
     yellow_fill = PatternFill("solid", fgColor="FFFF00")
@@ -258,21 +254,21 @@ def write_zone_sheet(wb: Workbook, sheet_name: str, sessions: list[dict]) -> Non
         cell.border = border
 
     for session in sessions:
-        ws.append([session["device"], session["start"].date(), session["start"], session["end"], session["duration"]])
+        ws.append([session["device"], session["start"].date(), session["start"], session["duration"]])
 
     first_data_row = 2
     last_data_row = 1 + len(sessions)
     average_row = last_data_row + 1
-    ws.cell(average_row, 4, "Average")
-    ws.cell(average_row, 5, timedelta(seconds=sum(item["duration"].total_seconds() for item in sessions) / len(sessions)) if sessions else None)
+    ws.cell(average_row, 3, "Average")
+    ws.cell(average_row, 4, timedelta(seconds=sum(item["duration"].total_seconds() for item in sessions) / len(sessions)) if sessions else None)
 
     if sessions:
         table_name = "".join(ch for ch in sheet_name if ch.isalnum()) + "LoadingTimes"
-        table = Table(displayName=table_name, ref=f"A1:E{last_data_row}")
+        table = Table(displayName=table_name, ref=f"A1:D{last_data_row}")
         table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showFirstColumn=False, showLastColumn=False, showRowStripes=False, showColumnStripes=False)
         ws.add_table(table)
 
-    for row in ws.iter_rows(min_row=2, max_row=average_row, max_col=5):
+    for row in ws.iter_rows(min_row=2, max_row=average_row, max_col=4):
         for cell in row:
             cell.font = Font(size=12)
             cell.border = border
@@ -280,21 +276,19 @@ def write_zone_sheet(wb: Workbook, sheet_name: str, sessions: list[dict]) -> Non
 
     for row_idx, session in enumerate(sessions, start=first_data_row):
         if session["duration"] > LONG_LOAD:
-            for cell in ws[row_idx][0:5]:
+            for cell in ws[row_idx][0:4]:
                 cell.fill = yellow_fill
 
     for row_idx in range(first_data_row, average_row + 1):
         ws.cell(row_idx, 2).number_format = "mmm d, yyyy"
         ws.cell(row_idx, 3).number_format = "h:mm:ss AM/PM"
-        ws.cell(row_idx, 4).number_format = "h:mm:ss AM/PM"
-        ws.cell(row_idx, 5).number_format = "[h]:mm"
+        ws.cell(row_idx, 4).number_format = "[h]:mm"
 
-    ws.cell(average_row, 4).alignment = Alignment(horizontal="center")
+    ws.cell(average_row, 3).alignment = Alignment(horizontal="center")
     ws.column_dimensions["A"].width = 14
     ws.column_dimensions["B"].width = 24
     ws.column_dimensions["C"].width = 18
-    ws.column_dimensions["D"].width = 18
-    ws.column_dimensions["E"].width = 16
+    ws.column_dimensions["D"].width = 16
     ws.row_dimensions[1].height = 24
     for row_idx in range(2, average_row + 1):
         ws.row_dimensions[row_idx].height = 21
@@ -332,20 +326,19 @@ def create_combined_pdf(zone_sessions: list[tuple[dict, list[dict]]]) -> Path:
             styles["Title"],
         )
         story.extend([title, Spacer(1, 0.2 * inch)])
-        rows = [["Device", "Date", "Start Time", "End Time", "Duration"]]
+        rows = [["Device", "Date", "Start Time", "Duration"]]
         for session in sessions:
             rows.append(
                 [
                     session["device"],
                     session["start"].strftime("%b %d, %Y").replace(" 0", " "),
                     session["start"].strftime("%-I:%M:%S %p"),
-                    session["end"].strftime("%-I:%M:%S %p"),
                     duration_text(session["duration"]),
                 ]
             )
         average = timedelta(seconds=sum(item["duration"].total_seconds() for item in sessions) / len(sessions)) if sessions else timedelta(0)
-        rows.append(["", "", "", "Average", duration_text(average) if sessions else "-"])
-        table = PdfTable(rows, colWidths=[2.05 * inch, 1.18 * inch, 1.5 * inch, 1.5 * inch, 1.02 * inch], repeatRows=1)
+        rows.append(["", "", "Average", duration_text(average) if sessions else "-"])
+        table = PdfTable(rows, colWidths=[2.45 * inch, 1.45 * inch, 1.65 * inch, 1.2 * inch], repeatRows=1)
         commands = [
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E78")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
@@ -416,8 +409,8 @@ def validate_outputs(audit: dict, plant_files: list[Path]) -> None:
             raise SystemExit(f"{zone_label} has an invalid ignored stop count.")
         if zone_audit["longLoadCount"] > zone_audit["cleanedLoadCount"]:
             raise SystemExit(f"{zone_label} long-load count exceeds cleaned load count.")
-        if not zone_audit["withinOperatingWindow"]:
-            raise SystemExit(f"{zone_label} contains time outside 5:00 AM-5:00 PM.")
+        if not zone_audit["startsWithinOperatingWindow"]:
+            raise SystemExit(f"{zone_label} contains a session starting outside 5:00 AM-5:00 PM.")
         if zone_audit["maxDurationSeconds"] > MAX_DURATION.total_seconds():
             raise SystemExit(f"{zone_label} contains a duration over 4 hours.")
 
@@ -434,7 +427,7 @@ def main() -> int:
     audit = {
         "reportDate": REPORT_DAY.isoformat(),
         "weekday": REPORT_DAY.strftime("%A"),
-        "method": "Trip stopPoint inside zone polygon or within tolerance; clamp to 5:00 AM-5:00 PM; stop to nextTripStart; merge re-entry gaps <= 25 minutes; exclude durations under 25 minutes and probable errors over 4 hours",
+        "method": "Trip stopPoint inside zone polygon or within tolerance; include sessions starting from 5:00 AM through 4:59 PM without capping end time; stop to nextTripStart; merge re-entry gaps <= 25 minutes; exclude durations under 25 minutes and probable errors over 4 hours",
         "zoneToleranceMiles": ZONE_TOLERANCE_MILES,
         "rawTripCount": len(trips),
         "files": {},
@@ -458,9 +451,8 @@ def main() -> int:
             "probableErrorCount": sum(1 for item in ignored if item["reason"].startswith("Probable error")),
             "averageSeconds": sum(item["duration"].total_seconds() for item in sessions) / len(sessions) if sessions else 0,
             "maxDurationSeconds": max((item["duration"].total_seconds() for item in sessions), default=0),
-            "withinOperatingWindow": all(
-                OPERATING_START <= item["start"].time() <= OPERATING_END
-                and OPERATING_START <= item["end"].time() <= OPERATING_END
+            "startsWithinOperatingWindow": all(
+                OPERATING_START <= item["start"].time() < OPERATING_END
                 for item in sessions
             ),
             "sortedStartTimes": sorted_start_times,

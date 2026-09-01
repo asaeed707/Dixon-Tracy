@@ -79,7 +79,7 @@ jobs:
                       f"`{zone['ignoredUnder25Count']}` ignored under-25 stops, "
             f"`{zone['longLoadCount']}` over 1:30, "
             f"`{zone['probableErrorCount']}` probable errors over 4:00, "
-            f"within 5:00 AM-5:00 PM `{zone['withinOperatingWindow']}`, "
+            f"starts within 5:00 AM-5:00 PM `{zone['startsWithinOperatingWindow']}`, "
             f"sorted starts `{zone['sortedStartTimes']}`"
                   )
           PY
