@@ -25,7 +25,7 @@ jobs:
       SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
       SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
       EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
-      EMAIL_TO: ${{ secrets.EMAIL_TO }}
+      EMAIL_TO: ${{ secrets.DIXON_TRACY_EMAIL_TO }}
       REPORT_DATE: ${{ inputs.report_date }}
       REQUIRE_EMAIL: "1"
       TZ: America/Los_Angeles

@@ -22,6 +22,7 @@ Add these in `Settings` -> `Secrets and variables` -> `Actions` -> `New reposito
 - `SMTP_PASSWORD`
 - `EMAIL_FROM`
 - `EMAIL_TO`
+- `DIXON_TRACY_EMAIL_TO`
 
 For Gmail SMTP:
 
@@ -30,9 +31,10 @@ For Gmail SMTP:
 - `SMTP_USERNAME`: your Gmail address
 - `SMTP_PASSWORD`: a Gmail app password
 - `EMAIL_FROM`: your Gmail address
-- `EMAIL_TO`: `Brad.Wilson@materialtransport.com`
+- `DIXON_TRACY_EMAIL_TO`: `ali.saeed@materialtransport.com` for the weekday Dixon/Tracy workflow
+- `EMAIL_TO`: recipient for the separate monthly PABCO/Dupont workflow
 
-Multiple recipients can be comma-separated in `EMAIL_TO`.
+Multiple recipients can be comma-separated in either recipient secret.
 
 ## Go-Live Checklist
 
