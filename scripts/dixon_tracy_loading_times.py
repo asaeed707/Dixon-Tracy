@@ -371,6 +371,14 @@ def create_combined_pdf(zone_sessions: list[tuple[dict, list[dict]]]) -> Path:
         for row_index, session in enumerate(sessions, start=1):
             if session["duration"] > LONG_LOAD:
                 commands.append(("BACKGROUND", (0, row_index), (-1, row_index), colors.yellow))
+        # Reapply the header styling last so ReportLab preserves it when a
+        # short second-plant table follows an explicit page break.
+        commands.extend(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E78")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ]
+        )
         table.setStyle(TableStyle(commands))
         story.append(table)
         if index < len(zone_sessions) - 1:
