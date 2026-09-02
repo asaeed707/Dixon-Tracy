@@ -373,7 +373,7 @@ def create_combined_pdf(zone_sessions: list[tuple[dict, list[dict]]]) -> Path:
         table = PdfTable(
             rows,
             colWidths=[1.75 * inch, 1.25 * inch, 1.45 * inch, 1.45 * inch, 0.85 * inch],
-            repeatRows=1,
+            repeatRows=0,
         )
         commands = [
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E78")),
@@ -392,8 +392,8 @@ def create_combined_pdf(zone_sessions: list[tuple[dict, list[dict]]]) -> Path:
         for row_index, session in enumerate(sessions, start=1):
             if session["duration"] > LONG_LOAD:
                 commands.append(("BACKGROUND", (0, row_index), (-1, row_index), colors.yellow))
-        # Reapply the header styling last so ReportLab preserves it when a
-        # short second-plant table follows an explicit page break.
+        # Reapply the header styling last so it takes precedence over all row
+        # backgrounds, including long-load highlighting.
         commands.extend(
             [
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E78")),
