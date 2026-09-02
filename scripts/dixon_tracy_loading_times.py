@@ -240,7 +240,7 @@ def sessions_for_zone(zone: dict, trips: list[dict], devices: dict[str, dict]) -
 
 def write_zone_sheet(wb: Workbook, sheet_name: str, sessions: list[dict]) -> None:
     ws = wb.create_sheet(sheet_name)
-    ws.append(["Device", "Date", "Start Time", "Duration"])
+    ws.append(["Device", "Date", "Start Time", "Stop Time", "Duration"])
 
     header_fill = PatternFill("solid", fgColor="1F4E78")
     yellow_fill = PatternFill("solid", fgColor="FFFF00")
@@ -254,21 +254,29 @@ def write_zone_sheet(wb: Workbook, sheet_name: str, sessions: list[dict]) -> Non
         cell.border = border
 
     for session in sessions:
-        ws.append([session["device"], session["start"].date(), session["start"], session["duration"]])
+        ws.append(
+            [
+                session["device"],
+                session["start"].date(),
+                session["start"],
+                session["end"],
+                session["duration"],
+            ]
+        )
 
     first_data_row = 2
     last_data_row = 1 + len(sessions)
     average_row = last_data_row + 1
-    ws.cell(average_row, 3, "Average")
-    ws.cell(average_row, 4, timedelta(seconds=sum(item["duration"].total_seconds() for item in sessions) / len(sessions)) if sessions else None)
+    ws.cell(average_row, 4, "Average")
+    ws.cell(average_row, 5, timedelta(seconds=sum(item["duration"].total_seconds() for item in sessions) / len(sessions)) if sessions else None)
 
     if sessions:
         table_name = "".join(ch for ch in sheet_name if ch.isalnum()) + "LoadingTimes"
-        table = Table(displayName=table_name, ref=f"A1:D{last_data_row}")
+        table = Table(displayName=table_name, ref=f"A1:E{last_data_row}")
         table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showFirstColumn=False, showLastColumn=False, showRowStripes=False, showColumnStripes=False)
         ws.add_table(table)
 
-    for row in ws.iter_rows(min_row=2, max_row=average_row, max_col=4):
+    for row in ws.iter_rows(min_row=2, max_row=average_row, max_col=5):
         for cell in row:
             cell.font = Font(size=12)
             cell.border = border
@@ -276,19 +284,21 @@ def write_zone_sheet(wb: Workbook, sheet_name: str, sessions: list[dict]) -> Non
 
     for row_idx, session in enumerate(sessions, start=first_data_row):
         if session["duration"] > LONG_LOAD:
-            for cell in ws[row_idx][0:4]:
+            for cell in ws[row_idx][0:5]:
                 cell.fill = yellow_fill
 
     for row_idx in range(first_data_row, average_row + 1):
         ws.cell(row_idx, 2).number_format = "mmm d, yyyy"
         ws.cell(row_idx, 3).number_format = "h:mm:ss AM/PM"
-        ws.cell(row_idx, 4).number_format = "[h]:mm"
+        ws.cell(row_idx, 4).number_format = "h:mm:ss AM/PM"
+        ws.cell(row_idx, 5).number_format = "[h]:mm"
 
-    ws.cell(average_row, 3).alignment = Alignment(horizontal="center")
+    ws.cell(average_row, 4).alignment = Alignment(horizontal="center")
     ws.column_dimensions["A"].width = 14
     ws.column_dimensions["B"].width = 24
     ws.column_dimensions["C"].width = 18
-    ws.column_dimensions["D"].width = 16
+    ws.column_dimensions["D"].width = 18
+    ws.column_dimensions["E"].width = 16
     ws.row_dimensions[1].height = 24
     for row_idx in range(2, average_row + 1):
         ws.row_dimensions[row_idx].height = 21
@@ -326,24 +336,29 @@ def create_combined_pdf(zone_sessions: list[tuple[dict, list[dict]]]) -> Path:
             styles["Title"],
         )
         story.extend([title, Spacer(1, 0.2 * inch)])
-        rows = [["Device", "Date", "Start Time", "Duration"]]
+        rows = [["Device", "Date", "Start Time", "Stop Time", "Duration"]]
         for session in sessions:
             rows.append(
                 [
                     session["device"],
                     session["start"].strftime("%b %d, %Y").replace(" 0", " "),
                     session["start"].strftime("%-I:%M:%S %p"),
+                    session["end"].strftime("%-I:%M:%S %p"),
                     duration_text(session["duration"]),
                 ]
             )
         average = timedelta(seconds=sum(item["duration"].total_seconds() for item in sessions) / len(sessions)) if sessions else timedelta(0)
-        rows.append(["", "", "Average", duration_text(average) if sessions else "-"])
-        table = PdfTable(rows, colWidths=[2.45 * inch, 1.45 * inch, 1.65 * inch, 1.2 * inch], repeatRows=1)
+        rows.append(["", "", "", "Average", duration_text(average) if sessions else "-"])
+        table = PdfTable(
+            rows,
+            colWidths=[1.75 * inch, 1.25 * inch, 1.45 * inch, 1.45 * inch, 0.85 * inch],
+            repeatRows=1,
+        )
         commands = [
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E78")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica"),
-            ("FONTSIZE", (0, 0), (-1, -1), 10),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
             ("ALIGN", (1, 1), (-1, -1), "CENTER"),
             ("ALIGN", (0, 0), (-1, 0), "LEFT"),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
