@@ -2,9 +2,10 @@ name: Dixon Tracy Loading Times
 
 on:
   schedule:
-    # GitHub cron uses UTC. Trigger at both possible UTC hours and gate below so
-    # the report runs at 6:00 AM Pacific across daylight-saving changes.
-    - cron: "0 13,14 * * 1-5"
+    # Separate UTC triggers let the gate select 6 AM Pacific by UTC offset,
+    # even when GitHub starts a scheduled job late.
+    - cron: "0 13 * * 1-5"
+    - cron: "0 14 * * 1-5"
   workflow_dispatch:
     inputs:
       report_date:
@@ -34,7 +35,11 @@ jobs:
       - name: Confirm 6 AM Pacific schedule
         id: schedule_gate
         run: |
-          if [[ "${{ github.event_name }}" != "schedule" || "$(TZ=America/Los_Angeles date +%H)" == "06" ]]; then
+          pacific_offset="$(TZ=America/Los_Angeles date +%z)"
+          scheduled_cron="${{ github.event.schedule }}"
+          if [[ "${{ github.event_name }}" != "schedule" \
+             || ( "$pacific_offset" == "-0700" && "$scheduled_cron" == "0 13 * * 1-5" ) \
+             || ( "$pacific_offset" == "-0800" && "$scheduled_cron" == "0 14 * * 1-5" ) ]]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
