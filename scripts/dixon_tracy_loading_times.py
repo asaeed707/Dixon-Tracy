@@ -100,10 +100,10 @@ def fetch_lookup(client: GeotabClient, type_name: str, fields: list[str], limit:
 
 
 def event_type(rule_name: str) -> str | None:
-    upper_name = rule_name.upper()
-    if "EXIT" in upper_name:
+    upper_name = " ".join(rule_name.upper().split())
+    if upper_name.endswith("EXIT"):
         return "exit"
-    if "ENTRY" in upper_name or "ENTER" in upper_name:
+    if upper_name:
         return "entry"
     return None
 
@@ -117,11 +117,17 @@ def fetch_inputs(client: GeotabClient) -> tuple[dict[str, list[dict]], dict[str,
     rule_names_by_zone: dict[str, list[str]] = {}
 
     for zone_config in ZONES:
+        base_rule_name = f"BB {zone_config['rule_token']}"
+        accepted_rule_names = {
+            base_rule_name,
+            f"{base_rule_name} ENTRY",
+            f"{base_rule_name} ENTER",
+            f"{base_rule_name} EXIT",
+        }
         selected_rules = {
             rule_id: rule.get("name", "")
             for rule_id, rule in rules.items()
-            if zone_config["rule_token"] in rule.get("name", "").upper()
-            and event_type(rule.get("name", "")) in {"entry", "exit"}
+            if " ".join(rule.get("name", "").upper().split()) in accepted_rule_names
         }
         selected_types = {event_type(name) for name in selected_rules.values()}
         if selected_types != {"entry", "exit"}:
