@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 import sys
 import smtplib
@@ -33,11 +32,9 @@ LONG_LOAD = timedelta(hours=1, minutes=30)
 MAX_DURATION = timedelta(hours=4)
 OPERATING_START = time(5, 0)
 OPERATING_END = time(17, 0)
-ZONE_TOLERANCE_MILES = float(os.environ.get("ZONE_TOLERANCE_MILES", "0.2"))
-
 ZONES = [
-    {"label": "BB Dixon", "title": "Dixon", "id": "b1D3B0", "sheet": "BB Dixon"},
-    {"label": "BB Tracy", "title": "Tracy", "id": "bC1E", "sheet": "BB Tracy"},
+    {"label": "BB Dixon", "title": "Dixon", "rule_token": "DIXON", "sheet": "BB Dixon"},
+    {"label": "BB Tracy", "title": "Tracy", "rule_token": "TRACY", "sheet": "BB Tracy"},
 ]
 
 
@@ -83,38 +80,6 @@ def parse_api_datetime(value: str | None) -> datetime | None:
     return dt.astimezone(LOCAL_TZ).replace(tzinfo=None)
 
 
-def point_in_poly(lat: float, lon: float, points: list[dict]) -> bool:
-    inside = False
-    j = len(points) - 1
-    for i, point in enumerate(points):
-        yi, xi = point.get("y"), point.get("x")
-        yj, xj = points[j].get("y"), points[j].get("x")
-        if yi is None or xi is None or yj is None or xj is None:
-            j = i
-            continue
-        if ((xi > lon) != (xj > lon)) and (lat < (yj - yi) * (lon - xi) / ((xj - xi) or 1e-12) + yi):
-            inside = not inside
-        j = i
-    return inside
-
-
-def haversine_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    radius_miles = 3958.7613
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dp = math.radians(lat2 - lat1)
-    dl = math.radians(lon2 - lon1)
-    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
-    return 2 * radius_miles * math.asin(math.sqrt(a))
-
-
-def zone_center(points: list[dict]) -> tuple[float, float]:
-    usable = [point for point in points if "x" in point and "y" in point]
-    return (
-        sum(float(point["y"]) for point in usable) / len(usable),
-        sum(float(point["x"]) for point in usable) / len(usable),
-    )
-
-
 def ref_id(value: object) -> str:
     if isinstance(value, dict):
         return str(value.get("id") or "")
@@ -134,107 +99,152 @@ def fetch_lookup(client: GeotabClient, type_name: str, fields: list[str], limit:
     return {row["id"]: row for row in rows if row.get("id")}
 
 
-def fetch_inputs(client: GeotabClient) -> tuple[dict[str, dict], list[dict], dict[str, dict]]:
-    zone_map = {}
-    for zone_config in ZONES:
-        rows = client.call("Get", {"typeName": "Zone", "credentials": client.credentials, "search": {"id": zone_config["id"]}, "resultsLimit": 1})
-        if not rows:
-            raise SystemExit(f"Zone not found: {zone_config['label']} ({zone_config['id']})")
-        zone_map[zone_config["id"]] = rows[0]
+def event_type(rule_name: str) -> str | None:
+    upper_name = rule_name.upper()
+    if "EXIT" in upper_name:
+        return "exit"
+    if "ENTRY" in upper_name or "ENTER" in upper_name:
+        return "entry"
+    return None
 
+
+def fetch_inputs(client: GeotabClient) -> tuple[dict[str, list[dict]], dict[str, dict], dict[str, list[str]]]:
     start_local = datetime.combine(REPORT_DAY, time.min, LOCAL_TZ)
     end_local = start_local + timedelta(days=1)
-    trips = client.call(
-        "Get",
-        {
-            "typeName": "Trip",
-            "credentials": client.credentials,
-            "search": {"fromDate": iso_z(start_local), "toDate": iso_z(end_local)},
-            "resultsLimit": 50000,
-        },
-    )
     devices = fetch_lookup(client, "Device", ["id", "name"])
-    return zone_map, trips, devices
+    rules = fetch_lookup(client, "Rule", ["id", "name"], limit=5000)
+    events_by_zone: dict[str, list[dict]] = {}
+    rule_names_by_zone: dict[str, list[str]] = {}
+
+    for zone_config in ZONES:
+        selected_rules = {
+            rule_id: rule.get("name", "")
+            for rule_id, rule in rules.items()
+            if zone_config["rule_token"] in rule.get("name", "").upper()
+            and event_type(rule.get("name", "")) in {"entry", "exit"}
+        }
+        selected_types = {event_type(name) for name in selected_rules.values()}
+        if selected_types != {"entry", "exit"}:
+            raise SystemExit(
+                f"Could not find both ENTRY and EXIT rules for {zone_config['label']}. "
+                f"Matched: {sorted(selected_rules.values())}"
+            )
+
+        raw_events = []
+        for rule_id in selected_rules:
+            raw_events.extend(
+                client.call(
+                    "Get",
+                    {
+                        "typeName": "ExceptionEvent",
+                        "credentials": client.credentials,
+                        "search": {
+                            "fromDate": iso_z(start_local),
+                            "toDate": iso_z(end_local),
+                            "ruleSearch": {"id": rule_id},
+                        },
+                        "resultsLimit": 50000,
+                    },
+                )
+            )
+
+        events = []
+        seen = set()
+        for item in raw_events:
+            timestamp = parse_api_datetime(item.get("activeFrom"))
+            rule_id = ref_id(item.get("rule"))
+            kind = event_type(selected_rules.get(rule_id, ""))
+            device_id = ref_id(item.get("device"))
+            dedupe_key = (device_id, timestamp, kind)
+            if timestamp is None or kind is None or not device_id or dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            events.append(
+                {
+                    "device": devices.get(device_id, {}).get("name") or device_id,
+                    "device_id": device_id,
+                    "timestamp": timestamp,
+                    "type": kind,
+                    "rule": selected_rules.get(rule_id, ""),
+                    "event_id": item.get("id", ""),
+                }
+            )
+        events.sort(key=lambda item: (item["timestamp"], item["device"], item["type"]))
+        events_by_zone[zone_config["label"]] = events
+        rule_names_by_zone[zone_config["label"]] = sorted(selected_rules.values())
+
+    return events_by_zone, devices, rule_names_by_zone
 
 
-def sessions_for_zone(zone: dict, trips: list[dict], devices: dict[str, dict]) -> tuple[list[dict], list[dict]]:
-    points = zone.get("points") or []
-    center_lat, center_lon = zone_center(points)
-    stops = []
+def sessions_for_zone(events: list[dict]) -> tuple[list[dict], list[dict]]:
     ignored = []
-
-    for trip in trips:
-        stop_point = trip.get("stopPoint") or {}
-        lon = stop_point.get("x")
-        lat = stop_point.get("y")
-        if lon is None or lat is None:
-            continue
-        lat = float(lat)
-        lon = float(lon)
-        distance = haversine_miles(lat, lon, center_lat, center_lon)
-        if not point_in_poly(lat, lon, points) and distance > ZONE_TOLERANCE_MILES:
-            continue
-        start = parse_api_datetime(trip.get("stop"))
-        end = parse_api_datetime(trip.get("nextTripStart"))
-        if start is None:
-            continue
-        if end is None:
-            end = start
-        if start.date() != REPORT_DAY or not OPERATING_START <= start.time() < OPERATING_END:
-            continue
-        device_id = ref_id(trip.get("device"))
-        device = devices.get(device_id, {})
-        stops.append(
-            {
-                "device": device.get("name") or device_id,
-                "device_id": device_id,
-                "start": start,
-                "end": end,
-                "trip_id": trip.get("id", ""),
-                "distance_miles": distance,
-            }
-        )
-
     grouped = defaultdict(list)
-    for stop in stops:
-        grouped[stop["device"]].append(stop)
+    for event in events:
+        grouped[event["device_id"]].append(event)
 
     sessions = []
-    for device, group in grouped.items():
-        group.sort(key=lambda item: item["start"])
-        current = None
-        trip_ids = []
-        for stop in group:
-            if current is None:
-                current = dict(stop)
-                trip_ids = [stop["trip_id"]]
+    for group in grouped.values():
+        group.sort(key=lambda item: item["timestamp"])
+        current_entry = None
+        index = 0
+        while index < len(group):
+            event = group[index]
+            if current_entry is None:
+                if event["type"] == "entry":
+                    current_entry = event
+                else:
+                    ignored.append({**event, "reason": "Exit event with no open entry"})
+                index += 1
                 continue
-            gap = stop["start"] - current["end"]
-            if gap <= MERGE_GAP:
-                if stop["end"] > current["end"]:
-                    current["end"] = stop["end"]
-                trip_ids.append(stop["trip_id"])
+
+            if event["type"] == "entry":
+                ignored.append({**event, "reason": "Duplicate entry while prior entry is still open"})
+                index += 1
                 continue
-            duration = current["end"] - current["start"]
+
+            duration = event["timestamp"] - current_entry["timestamp"]
+            next_event = group[index + 1] if index + 1 < len(group) else None
+            immediate_reentry = (
+                duration < MIN_DURATION
+                and next_event is not None
+                and next_event["type"] == "entry"
+                and next_event["timestamp"] - event["timestamp"] < MERGE_GAP
+            )
+            if immediate_reentry:
+                ignored.append({**event, "reason": "GPS blip exit under 25 minutes"})
+                ignored.append({**next_event, "reason": "Immediate re-entry after GPS blip"})
+                index += 2
+                continue
+
+            start = current_entry["timestamp"]
+            end = event["timestamp"]
+            session = {
+                "device": current_entry["device"],
+                "device_id": current_entry["device_id"],
+                "start": start,
+                "end": end,
+                "duration": duration,
+                "entry_event_id": current_entry["event_id"],
+                "exit_event_id": event["event_id"],
+            }
+            current_entry = None
+            index += 1
+
+            if start.date() != REPORT_DAY or not OPERATING_START <= start.time() < OPERATING_END:
+                ignored.append({**session, "reason": "Entry outside 5:00 AM-5:00 PM start window"})
+                continue
             if duration > MAX_DURATION:
-                ignored.append({**current, "duration": duration, "reason": "Probable error: duration over 4 hours"})
+                ignored.append({**session, "reason": "Probable error: duration over 4 hours"})
             elif duration >= MIN_DURATION:
-                sessions.append({**current, "duration": duration, "trip_ids": trip_ids[:]})
+                sessions.append(session)
             else:
-                ignored.append({**current, "duration": duration, "reason": "Stop under 25 minutes"})
-            current = dict(stop)
-            trip_ids = [stop["trip_id"]]
-        if current is not None:
-            duration = current["end"] - current["start"]
-            if duration > MAX_DURATION:
-                ignored.append({**current, "duration": duration, "reason": "Probable error: duration over 4 hours"})
-            elif duration >= MIN_DURATION:
-                sessions.append({**current, "duration": duration, "trip_ids": trip_ids[:]})
-            else:
-                ignored.append({**current, "duration": duration, "reason": "Stop under 25 minutes"})
+                ignored.append({**session, "reason": "Zone visit under 25 minutes"})
+
+        if current_entry is not None:
+            ignored.append({**current_entry, "reason": "Entry event with no matching exit"})
 
     sessions.sort(key=lambda item: item["start"])
-    ignored.sort(key=lambda item: (item["start"], item["device"]))
+    ignored.sort(key=lambda item: (item.get("timestamp") or item.get("start"), item["device"]))
     return sessions, ignored
 
 
@@ -443,16 +453,16 @@ def main() -> int:
     OUTPUT_AUDIT_DIR.mkdir(parents=True, exist_ok=True)
     client = GeotabClient(os.environ.get("GEOTAB_SERVER", "my.geotab.com"), timeout=int(os.environ.get("GEOTAB_TIMEOUT", "120")))
     client.authenticate(require_env("GEOTAB_USERNAME"), require_env("GEOTAB_PASSWORD"), require_env("GEOTAB_DATABASE"))
-    zone_map, trips, devices = fetch_inputs(client)
+    events_by_zone, _devices, rule_names_by_zone = fetch_inputs(client)
 
     wb = Workbook()
     del wb[wb.active.title]
     audit = {
         "reportDate": REPORT_DAY.isoformat(),
         "weekday": REPORT_DAY.strftime("%A"),
-        "method": "Trip stopPoint inside zone polygon or within tolerance; include sessions starting from 5:00 AM through 4:59 PM without capping end time; stop to nextTripStart; merge re-entry gaps <= 25 minutes; exclude durations under 25 minutes and probable errors over 4 hours",
-        "zoneToleranceMiles": ZONE_TOLERANCE_MILES,
-        "rawTripCount": len(trips),
+        "method": "Pair Geotab zone ENTRY ExceptionEvent activeFrom with the following EXIT ExceptionEvent activeFrom for each device; include entries from 5:00 AM through 4:59 PM without capping exit time; suppress immediate GPS exit/re-entry blips under 25 minutes; exclude visits under 25 minutes and probable errors over 4 hours",
+        "rawEventCount": sum(len(events) for events in events_by_zone.values()),
+        "rules": rule_names_by_zone,
         "files": {},
         "zones": {},
     }
@@ -460,7 +470,8 @@ def main() -> int:
     zone_sessions = []
 
     for zone_config in ZONES:
-        sessions, ignored = sessions_for_zone(zone_map[zone_config["id"]], trips, devices)
+        zone_events = events_by_zone[zone_config["label"]]
+        sessions, ignored = sessions_for_zone(zone_events)
         zone_sessions.append((zone_config, sessions))
         write_zone_sheet(wb, zone_config["sheet"], sessions)
         single_output = save_single_zone_workbook(zone_config, sessions)
@@ -468,8 +479,13 @@ def main() -> int:
         sorted_start_times = [item["start"] for item in sessions] == sorted(item["start"] for item in sessions)
         audit["files"][zone_config["label"]] = str(single_output)
         audit["zones"][zone_config["label"]] = {
+            "rawEventCount": len(zone_events),
             "cleanedLoadCount": len(sessions),
-            "ignoredUnder25Count": len(ignored),
+            "ignoredUnder25Count": sum(
+                1
+                for item in ignored
+                if "under 25 minutes" in item["reason"] or "Immediate re-entry" in item["reason"]
+            ),
             "longLoadCount": sum(1 for item in sessions if item["duration"] > LONG_LOAD),
             "probableErrorCount": sum(1 for item in ignored if item["reason"].startswith("Probable error")),
             "averageSeconds": sum(item["duration"].total_seconds() for item in sessions) / len(sessions) if sessions else 0,

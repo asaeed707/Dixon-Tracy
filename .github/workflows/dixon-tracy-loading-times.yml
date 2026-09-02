@@ -72,7 +72,7 @@ jobs:
           for path in sorted(Path("work").glob("bb_dixon_tracy_loading_times_*.json")):
               audit = json.loads(path.read_text())
               print(f"- Report date: `{audit['reportDate']}` ({audit['weekday']})")
-              print(f"- Raw Geotab trips: `{audit['rawTripCount']}`")
+              print(f"- Raw Geotab zone events: `{audit['rawEventCount']}`")
               for label, zone in audit["zones"].items():
                   print(
                       f"- {label}: `{zone['cleanedLoadCount']}` loads, "
