@@ -335,6 +335,11 @@ def duration_text(value: timedelta) -> str:
     return f"{total_minutes // 60}:{total_minutes % 60:02d}"
 
 
+def time_text(value: datetime) -> str:
+    rounded = (value + timedelta(microseconds=500_000)).replace(microsecond=0)
+    return rounded.strftime("%-I:%M:%S %p")
+
+
 def create_combined_pdf(zone_sessions: list[tuple[dict, list[dict]]]) -> Path:
     styles = getSampleStyleSheet()
     doc = SimpleDocTemplate(
@@ -358,8 +363,8 @@ def create_combined_pdf(zone_sessions: list[tuple[dict, list[dict]]]) -> Path:
                 [
                     session["device"],
                     session["start"].strftime("%b %d, %Y").replace(" 0", " "),
-                    session["start"].strftime("%-I:%M:%S %p"),
-                    session["end"].strftime("%-I:%M:%S %p"),
+                    time_text(session["start"]),
+                    time_text(session["end"]),
                     duration_text(session["duration"]),
                 ]
             )
